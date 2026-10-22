@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>全排列递归动画 · n=3</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f6fa;color:#24324a;font:15px/1.6 system-ui,-apple-system,"Microsoft YaHei",sans-serif}
+main{max-width:1000px;margin:24px auto;padding:24px;background:white;border-radius:16px}
+h1{font-size:23px;margin:0 0 8px}
+small,.muted{color:#758198}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:18px 0 10px}
+button,select{font:inherit;padding:7px 13px;border:1px solid #d8deea;border-radius:8px;background:white;cursor:pointer}
+button.primary{background:#3267d6;color:white;border-color:#3267d6}
+button:disabled{opacity:.4;cursor:default}
+input[type=range]{width:100%;accent-color:#3267d6}
+.status{padding:14px;background:#eef4ff;border-radius:9px;min-height:82px;margin:12px 0}
+#where{font-weight:bold;color:#3267d6}
+.memory,.columns{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+h2{font-size:16px;margin:12px 0 8px}
+.cells{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.cell{text-align:center;padding:8px 4px;border-bottom:3px dashed #cad2df;background:#f7f8fb;color:#788397;transition:background .2s}
+.cell strong{display:block;font-size:23px}
+.cell.valid{border-bottom:3px solid #3267d6;background:#eef4ff;color:#24324a}
+.cell.changed{background:#fff0ce;border-bottom-color:#e6a329}
+.legend{font-size:13px;color:#758198;margin:12px 0}
+.frame{padding:10px;margin:6px 0;border-left:4px solid #d9dfea;background:#f7f8fb;border-radius:4px;min-height:70px}
+.frame.active{border-color:#3267d6;background:#eef4ff}
+.frame.empty{opacity:.45}
+.frame small{display:block}
+.code{font:13px/1.8 ui-monospace,SFMono-Regular,Consolas,monospace;background:#f8f9fc;padding:10px 0;border-radius:8px}
+.line{white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 8px;border-left:3px solid transparent}
+.line.current{background:#dfeaff;border-color:#3267d6}
+.num{display:inline-block;width:25px;color:#929bad;user-select:none}
+.output{display:flex;gap:10px;flex-wrap:wrap;min-height:45px}
+.result{font:18px monospace;padding:8px 14px;background:#eaf7ef;border-radius:6px}
+.partial{background:#fff0ce}
+@media(max-width:680px){main{margin:0;padding:15px}.columns{grid-template-columns:1fr}.memory{gap:10px}}
+</style>
+</head>
+<body>
+<main>
+<h1>全排列递归 · n = 3</h1>
+<div class="muted">各层共享 array、symbol；每层有自己的 index 和 i。</div>
+<div class="controls">
+<button id="prev">上一步</button>
+<button id="play" class="primary">播放</button>
+<button id="next">下一步</button>
+<button id="reset">从头开始</button>
+<label>速度
+<select id="speed">
+<option value="1500">慢</option>
+<option value="850" selected>正常</option>
+<option value="350">快</option>
+</select>
+</label>
+<span id="count"></span>
+</div>
+<input id="seek" type="range" min="0" value="0" step="1" aria-label="执行进度">
+<div class="status">
+<div id="where"></div>
+<div id="event" aria-live="polite"></div>
+</div>
+<div class="memory">
+<section>
+<h2>共享 array <small>下标＝位置</small></h2>
+<div id="array" class="cells"></div>
+</section>
+<section>
+<h2>共享 symbol <small>下标 i 对应数字 i+1</small></h2>
+<div id="symbol" class="cells"></div>
+</section>
+</div>
+<div class="legend">蓝色实线＝当前已选 / 占用；虚线＝旧值 / 可选；黄色＝本步修改。return 不会清空数组。</div>
+<div class="columns">
+<section>
+<h2>调用栈 <small>蓝色为当前执行层</small></h2>
+<div id="stack"></div>
+</section>
+<section>
+<h2>执行位置 <small>高亮＝本步刚执行</small></h2>
+<div id="code" class="code"></div>
+</section>
+</div>
+<h2>已输出 <small id="outputCount"></small></h2>
+<div id="output" class="output"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const code = [
+'void FullArray(int index) { int i;',
+'  if (index >= n) {',
+'    for (i=0; i<n; i++)',
+'      printf("%d ",array[i]);',
+'    printf("\\n");',
+'    return;',
+'  }',
+'  for (i=0; i<n; i++) {',
+'    if (symbol[i] == 0) {',
+'      array[index] = i+1;',
+'      symbol[i] = 1;',
+'      FullArray(index+1);',
+'      symbol[i] = 0;',
+'    }',
+'  }',
+'} // 函数结束，返回调用处'
+];
+code.forEach((text,i)=>{
+  const row=document.createElement('div');
+  row.className='line';
+  const num=document.createElement('span');
+  num.className='num';
+  num.textContent=i+1;
+  row.append(num,document.createTextNode(text));
+  $('code').append(row);
+});
+
+const array=[0,0,0],symbol=[0,0,0];
+const stack=[],outputs=[],steps=[];
+let valid=0,serial=0,partial=[];
+
+function snap(line,event,kind='',changed=null){
+  steps.push({
+    line,event,kind,changed,valid,
+    array:[...array],symbol:[...symbol],
+    stack:stack.map(f=>({...f})),
+    outputs:outputs.map(a=>[...a]),
+    partial:[...partial]
+  });
+}
+
+snap(0,'main 即将调用 FullArray(0)，两个全局数组初值均为 0。');
+
+function run(index){
+  const frame={index,i:null,id:++serial};
+  stack.push(frame);
+  valid=index;
+  snap(1,`进入 FullArray(${index})；两个数组仍是共享的同一份。`);
+  snap(2,`index=${index}，`+
+    (index===3?'已经填满，开始输出。':`准备填写 array[${index}]。`));
+
+  if(index===3){
+    frame.i=0;
+    snap(3,'输出循环初始化 i=0。');
+    while(frame.i<3){
+      partial.push(array[frame.i]);
+      snap(4,`输出 array[${frame.i}]=${array[frame.i]}；数组不变。`);
+      frame.i++;
+      snap(3,`输出循环 i++ → ${frame.i}，`+
+        (frame.i<3?'继续输出。':'输出循环结束。'));
+    }
+    outputs.push([...partial]);
+    partial=[];
+    snap(5,`输出换行，完成排列：${array.join(' ')}。`);
+    snap(6,'执行 return，准备返回 FullArray(2)；数组不变。','return');
+  }else{
+    frame.i=0;
+    snap(8,'本层循环初始化 i=0，先尝试数字 1。');
+    while(frame.i<3){
+      const i=frame.i;
+      snap(9,`检查 symbol[${i}]=${symbol[i]}：数字 ${i+1}`+
+        (symbol[i]?' 已占用，跳过。':' 可以选择。'));
+
+      if(symbol[i]===0){
+        const before=array[index];
+        array[index]=i+1;
+        valid=index+1;
+        snap(10,`写入 array[${index}]：${before} → ${i+1}。`,
+          'write',{which:'array',index,before,after:i+1});
+
+        symbol[i]=1;
+        snap(11,`标记数字 ${i+1} 已使用：symbol[${i}] 0 → 1。`,
+          'mark',{which:'symbol',index:i,before:0,after:1});
+
+        snap(12,`调用 FullArray(${index+1})；当前层的 i=${i} 保留。`,'call');
+        run(index+1);
+
+        valid=index+1;
+        snap(12,`回到 FullArray(${index})，本层 i 仍为 ${i}；return 没有恢复任何数组。`,'resume');
+
+        symbol[i]=0;
+        valid=index;
+        snap(13,`取消数字 ${i+1} 的标记；array[${index}] 仍为 ${array[index]}，只是旧值。`,
+          'unmark',{which:'symbol',index:i,before:1,after:0});
+      }
+
+      frame.i++;
+      snap(8,`本层 i++ → ${frame.i}，`+
+        (frame.i<3?`尝试数字 ${frame.i+1}。`:'循环结束。'));
+    }
+    snap(16,`FullArray(${index}) 已试完所有数字，`+
+      (index?`返回 FullArray(${index-1})。`:'返回 main。')+
+      '数组不变。','return');
+  }
+  stack.pop();
+}
+
+run(0);
+valid=0;
+snap(0,'全部结束：array 保留最后一个排列 [3,2,1]，symbol 全为 0。');
+
+let pos=0,timer=null;
+$('seek').max=steps.length-1;
+
+function cells(which,s){
+  $(which).innerHTML=s[which].map((v,i)=>{
+    const chosen=which==='array'?i<s.valid:v===1;
+    const ch=s.changed;
+    const changed=ch&&ch.which===which&&ch.index===i;
+    const state=which==='array'
+      ?(chosen?'已选':v===0?'未填':'旧值')
+      :(v?'占用':'可选');
+    return `<div class="cell ${chosen?'valid':''} ${changed?'changed':''}">
+      <small>[${i}] ${which==='symbol'?'数字 '+(i+1):''}</small>
+      <strong>${v}</strong>
+      <small>${state}${changed?' · '+ch.before+' → '+ch.after:''}</small>
+    </div>`;
+  }).join('');
+}
+
+function render(){
+  const s=steps[pos],top=s.stack[s.stack.length-1];
+  $('count').textContent=`${pos+1} / ${steps.length}`;
+  $('seek').value=pos;
+  $('where').textContent=top
+    ?`第 ${top.index+1} 层 · FullArray(${top.index})`
+    :'main';
+  $('event').textContent=s.event;
+  cells('array',s);
+  cells('symbol',s);
+
+  $('stack').innerHTML=Array.from({length:4},(_,d)=>{
+    const f=s.stack[d],active=f&&d===s.stack.length-1;
+    const status=!f?'未调用 / 已返回'
+      :!active?'暂停，等待子函数'
+      :s.kind==='return'?'即将返回'
+      :s.kind==='call'?'准备进入下一层'
+      :'正在执行';
+    return `<div class="frame ${active?'active':''} ${!f?'empty':''}">
+      <b>第 ${d+1} 层 · FullArray(${d})</b>
+      <span>　i = ${f?(f.i===null?'未初始化':f.i):'—'}</span>
+      <small>${status}${f?' · 第 '+f.id+' 次调用':''}</small>
+    </div>`;
+  }).join('');
+
+  [...$('code').children].forEach((el,i)=>
+    el.classList.toggle('current',i+1===s.line));
+  $('outputCount').textContent=`${s.outputs.length} / 6 行`;
+  $('output').innerHTML=s.outputs.map(a=>
+    `<span class="result">${a.join(' ')}</span>`).join('')+
+    (s.partial.length?`<span class="result partial">${s.partial.join(' ')} ▏</span>`:'');
+  if(!s.outputs.length&&!s.partial.length)
+    $('output').textContent='尚未输出';
+  $('prev').disabled=pos===0;
+  $('next').disabled=pos===steps.length-1;
+  $('play').textContent=timer?'暂停':pos===steps.length-1?'重新播放':'播放';
+}
+
+function stop(){
+  clearInterval(timer);
+  timer=null;
+  render();
+}
+function start(){
+  if(pos===steps.length-1)pos=0;
+  timer=setInterval(()=>{
+    if(pos<steps.length-1)pos++;
+    if(pos===steps.length-1)stop();
+    else render();
+  },Number($('speed').value));
+  render();
+}
+
+$('play').onclick=()=>timer?stop():start();
+$('prev').onclick=()=>{stop();pos=Math.max(0,pos-1);render();};
+$('next').onclick=()=>{stop();pos=Math.min(steps.length-1,pos+1);render();};
+$('reset').onclick=()=>{stop();pos=0;render();};
+$('seek').oninput=()=>{stop();pos=Number($('seek').value);render();};
+$('speed').onchange=()=>{if(timer){stop();start();}};
+render();
+</script>
+</body>
+</html>
